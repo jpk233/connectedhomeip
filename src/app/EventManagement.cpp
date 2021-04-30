@@ -98,8 +98,8 @@ struct EventEnvelopeContext
 
     size_t mNumFieldsToRead =
         2 /* PriorityLevel and DeltaSystemTimestamp are there if that is not first event when putting events in report*/;
-    uint32_t mDeltaTime     = 0;
-    int64_t mDeltaUtc       = 0;
+    Timestamp mDeltaSystemTime = Timestamp::UTC(0);
+    Timestamp mDeltaUtc = Timestamp::System(0);
     PriorityLevel mPriority = PriorityLevel::First;
 };
 
@@ -126,38 +126,24 @@ void EventManagement::Init(Messaging::ExchangeManager * apExchangeManager, int a
         next = (bufferIndex < aNumBuffers - 1) ? &apCircularEventBuffer[bufferIndex + 1] : nullptr;
 
         current = &apCircularEventBuffer[bufferIndex];
-        current->Init(static_cast<uint8_t *>(apLogStorageResources[bufferIndex].mpBuffer),
-                      (uint32_t)(apLogStorageResources[bufferIndex].mBufferSize), prev, next);
+        current->Init(apLogStorageResources[bufferIndex].mpBuffer, apLogStorageResources[bufferIndex].mBufferSize, prev, next);
 
         prev = current;
 
         current->mProcessEvictedElement = AlwaysFail;
         current->mAppData               = nullptr;
         current->mPriority              = apLogStorageResources[bufferIndex].mPriority;
-        if ((apLogStorageResources[bufferIndex].mpCounterStorage != nullptr) &&
-            (apLogStorageResources[bufferIndex].mCounterKey != nullptr) && (apLogStorageResources[bufferIndex].mCounterEpoch != 0))
+        current->mpEventNumberCounter = apLogStorageResources[bufferIndex].InitializeCounter();
+
+        if (current->mpEventNumberCounter == nullptr)
         {
-            // We have been provided storage for a counter for this priority level.
-            CHIP_ERROR err = apLogStorageResources[bufferIndex].mpCounterStorage->Init(
-                *(apLogStorageResources[bufferIndex].mCounterKey), apLogStorageResources[bufferIndex].mCounterEpoch);
-            if (err != CHIP_NO_ERROR)
-            {
-                ChipLogError(EventLogging, "PersistedCounter[%d]->Init() failed with %d", bufferIndex, err);
-            }
-            current->mpEventNumberCounter = apLogStorageResources[bufferIndex].mpCounterStorage;
-        }
-        else
-        {
-            // No counter has been provided, so we'll use our
-            // "built-in" non-persisted counter.
             current->mNonPersistedCounter.Init(1);
             current->mpEventNumberCounter = &(current->mNonPersistedCounter);
         }
-
         current->mFirstEventNumber = static_cast<chip::EventNumber>(current->mpEventNumberCounter->GetValue());
     }
 
-    mpEventBuffer = &apCircularEventBuffer[0];
+    mpEventBuffer = apCircularEventBuffer;
     mState        = EventManagementStates::Idle;
     mBytesWritten = 0;
 }
@@ -196,7 +182,7 @@ exit:
     return err;
 }
 
-CHIP_ERROR EventManagement::EnsureSpace(size_t aRequiredSpace)
+CHIP_ERROR EventManagement::EnsureSpaceInCircularBuffer(size_t aRequiredSpace)
 {
     CHIP_ERROR err                    = CHIP_NO_ERROR;
     size_t requiredSpace              = aRequiredSpace;
@@ -255,11 +241,11 @@ CHIP_ERROR EventManagement::EnsureSpace(size_t aRequiredSpace)
                 eventBuffer->mAppData = reinterpret_cast<void *>(requiredSpace);
                 eventBuffer           = eventBuffer->mpNext;
 
-                // Sanity check: Die here on null event buffer.  If
+                // Sanity check: reuten error  here on null event buffer.  If
                 // eventBuffer->mpNext were null, then the `EvictBuffer`
-                // in line 130 would have succeeded -- the event was
+                // would have succeeded -- the event was
                 // already in the final buffer.
-                VerifyOrDie(eventBuffer != nullptr);
+                VerifyOrExit(eventBuffer != nullptr, err = CHIP_ERROR_INCORRECT_STATE);
 
                 requiredSpace = ctx.mSpaceNeededForEvent;
             }
@@ -279,10 +265,11 @@ CHIP_ERROR EventManagement::EnsureSpace(size_t aRequiredSpace)
     mpEventBuffer->mAppData               = nullptr;
 
 exit:
+    ChipLogFunctError(err);
     return err;
 }
 
-CHIP_ERROR EventManagement::BlitEvent(EventLoadOutContext * apContext, EventLoggingDelegate * apDelegate,
+CHIP_ERROR EventManagement::ConstructEvent(EventLoadOutContext * apContext, EventLoggingDelegate * apDelegate,
                                       const EventOptions * apOptions)
 {
 
@@ -300,7 +287,8 @@ CHIP_ERROR EventManagement::BlitEvent(EventLoadOutContext * apContext, EventLogg
 
     eventDataElementBuilder.Init(&(apContext->mWriter));
     eventPathBuilder = eventDataElementBuilder.CreateEventPathBuilder();
-    SuccessOrExit(eventPathBuilder.GetError());
+    err = eventPathBuilder.GetError();
+    SuccessOrExit(err);
 
     // TODO: Revisit NodeId since the the encoding spec and the IM seem to disagree on how this stuff works
     eventPathBuilder.NodeId(apOptions->mpEventSchema->mNodeId)
@@ -308,7 +296,8 @@ CHIP_ERROR EventManagement::BlitEvent(EventLoadOutContext * apContext, EventLogg
         .ClusterId(apOptions->mpEventSchema->mClusterId)
         .EventId(apOptions->mpEventSchema->mEventId)
         .EndOfEventPath();
-    SuccessOrExit(eventPathBuilder.GetError());
+    err = eventPathBuilder.GetError();
+    SuccessOrExit(err);
 
     eventDataElementBuilder.PriorityLevel(static_cast<uint8_t>(apContext->mPriority));
 
@@ -330,8 +319,8 @@ CHIP_ERROR EventManagement::BlitEvent(EventLoadOutContext * apContext, EventLogg
             eventDataElementBuilder.DeltaSystemTimestamp(deltatime);
         }
     }
-
-    SuccessOrExit(eventDataElementBuilder.GetError());
+    err = eventDataElementBuilder.GetError()
+    SuccessOrExit(err);
 
     err = apContext->mWriter.StartContainer(ContextTag(chip::app::EventDataElement::kCsTag_Data), chip::TLV::kTLVType_Structure,
                                             dataContainerType);
@@ -349,11 +338,7 @@ CHIP_ERROR EventManagement::BlitEvent(EventLoadOutContext * apContext, EventLogg
     err = apContext->mWriter.Finalize();
     SuccessOrExit(err);
 
-    // only update mFirst if an event was successfully written.
-    if (apContext->mFirst)
-    {
-        apContext->mFirst = false;
-    }
+    apContext->mFirst = false;
 
 exit:
     if (err != CHIP_NO_ERROR)
@@ -362,7 +347,7 @@ exit:
     }
     else
     {
-        // update these variables since BlitEvent can be used to track the
+        // update these variables since ConstructEvent can be used to track the
         // state of a set of events over multiple calls.
         apContext->mCurrentEventNumber++;
         if (apContext->mCurrentSystemTime.mType == Timestamp::Type::kSystem)
@@ -532,12 +517,7 @@ CHIP_ERROR EventManagement::LogEventPrivate(EventLoggingDelegate * apDelegate, c
     while (!didWriteEvent)
     {
         // Ensure we have space in the in-memory logging queues
-        err = EnsureSpace(requestSize);
-        // If we fail to ensure the initial reserve size, then the
-        // logging subsystem will never be able to make progress.  In
-        // that case, it is best to assert
-        if ((requestSize == kEventSizeRezerve) && (err != CHIP_NO_ERROR))
-            chipDie();
+        err = EnsureSpaceInCircularBuffer(requestSize);
         SuccessOrExit(err);
 
         // save a checkpoint for the underlying buffer.  Note that with
@@ -549,7 +529,7 @@ CHIP_ERROR EventManagement::LogEventPrivate(EventLoggingDelegate * apDelegate, c
         // Start the event container (anonymous structure) in the circular buffer
         writer.Init(*mpEventBuffer);
 
-        err = BlitEvent(&ctxt, apDelegate, &opts);
+        err = ConstructEvent(&ctxt, apDelegate, &opts);
 
         if (err == CHIP_ERROR_NO_MEMORY)
         {
@@ -657,7 +637,7 @@ CHIP_ERROR EventManagement::EventIterator(const TLVReader & aReader, size_t aDep
 
     if (event.mPriority == loadOutContext->mPriority)
     {
-        loadOutContext->mCurrentSystemTime.mValue += event.mDeltaTime;
+        loadOutContext->mCurrentSystemTime.mValue += event.mDeltaSystemTime.mValue;
         VerifyOrExit(loadOutContext->mCurrentEventNumber < loadOutContext->mStartingEventNumber, err = CHIP_EVENT_ID_FOUND);
         loadOutContext->mCurrentEventNumber++;
     }
@@ -759,7 +739,7 @@ CHIP_ERROR EventManagement::FetchEventParameters(const TLVReader & aReader, size
 
     if (reader.GetTag() == chip::TLV::ContextTag(chip::app::EventDataElement::kCsTag_DeltaSystemTimestamp))
     {
-        err = reader.Get(envelope->mDeltaTime);
+        err = reader.Get(envelope->mDeltaSystemTime.mValue);
         SuccessOrExit(err);
 
         envelope->mNumFieldsToRead--;
@@ -800,7 +780,7 @@ CHIP_ERROR EventManagement::EvictEvent(CHIPCircularTLVBuffer & apBuffer, void * 
         uint16_t numEventsToDrop = 1;
 
         eventBuffer->RemoveEvent(numEventsToDrop);
-        eventBuffer->mFirstEventSystemTimestamp.mValue += context.mDeltaTime;
+        eventBuffer->mFirstEventSystemTimestamp.mValue += context.mDeltaSystemTime.mValue;
         ChipLogProgress(EventLogging,
                         "Dropped events from buffer with priority %d due to overflow: { event priority_level: %d, count: %d };",
                         eventBuffer->mPriority, imp, numEventsToDrop);

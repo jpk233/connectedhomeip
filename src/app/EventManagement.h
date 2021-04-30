@@ -51,18 +51,6 @@ public:
     /**
      * @brief
      *   A constructor for the CircularEventBuffer (internal API).
-     *
-     * @param[in] apBuffer       The actual storage to use for event storage.
-     *
-     * @param[in] aBufferLength The length of the \c apBuffer in bytes.
-     *
-     * @param[in] apPrev         The pointer to CircularEventBuffer storing
-     *                           events of lesser priority.
-     *
-     * @param[in] apNext         The pointer to CircularEventBuffer storing
-     *                           events of greater priority.
-     *
-     * @return CircularEventBuffer
      */
     CircularEventBuffer();
 
@@ -189,19 +177,28 @@ enum class EventManagementStates
 
 struct LogStorageResources
 {
-    void * mpBuffer =
+    //TODO: Update CHIPCircularTLVBuffer with size_t for buffer size, then use ByteSpan
+    uint8_t * mpBuffer =
         nullptr; // Buffer to be used as a storage at the particular priority level and shared with more important events.
                  // Must not be nullptr.  Must be large enough to accommodate the largest event emitted by the system.
-    size_t mBufferSize = 0; //< The size, in bytes, of the `mBuffer`.
-    chip::Platform::PersistedStorage::Key * mCounterKey =
+    uint32_t mBufferSize = 0; //< The size, in bytes, of the `mBuffer`.
+    Platform::PersistedStorage::Key * mCounterKey =
         nullptr;                // Name of the key naming persistent counter for events of this priority.  When NULL, the persistent
                                 // counters will not be used for this priority level.
     uint32_t mCounterEpoch = 0; // The interval used in incrementing persistent counters.  When 0, the persistent counters will not
                                 // be used for this priority level.
-    chip::PersistedCounter * mpCounterStorage =
+    PersistedCounter * mpCounterStorage =
         nullptr; // application provided storage for persistent counter for this priority level.
     PriorityLevel mPriority =
         PriorityLevel::Invalid; // Log priority level associated with the resources provided in this structure.
+    PersistedCounter * InitializeCounter() const
+    {
+        if (mpCounterStorage != nullptr && mCounterKey != nullptr && mCounterEpoch != 0)
+        {
+            return (mpCounterStorage->Init(*mCounterKey, mCounterEpoch) != CHIP_NO_ERROR) ?  mpCounterStorage : nullptr;
+        }
+        return nullptr;
+    }
 };
 
 /**
@@ -437,7 +434,7 @@ public:
      *
      * @param[inout] apContext   EventLoadOutContext, initialized with stateful
      *                          information for the buffer. State is updated
-     *                          and preserved by BlitEvent using this context.
+     *                          and preserved by ConstructEvent using this context.
      *
      * @param[in] apDelegate The EventLoggingDelegate to serialize the event data
      *
@@ -445,7 +442,7 @@ public:
      *                          relevant to this event.
      *
      */
-    CHIP_ERROR BlitEvent(EventLoadOutContext * apContext, EventLoggingDelegate * apDelegate, const EventOptions * apOptions);
+    CHIP_ERROR ConstructEvent(EventLoadOutContext * apContext, EventLoggingDelegate * apDelegate, const EventOptions * apOptions);
 
     /**
      * @brief Helper function to skip writing an event corresponding to an allocated
@@ -453,7 +450,7 @@ public:
      *
      * @param[inout] apContext   EventLoadOutContext, initialized with stateful
      *                          information for the buffer. State is updated
-     *                          and preserved by BlitEvent using this context.
+     *                          and preserved by ConstructEvent using this context.
      *
      */
     void SkipEvent(EventLoadOutContext * apContext);
@@ -477,7 +474,7 @@ private:
      * @param[in] aRequiredSpace  require space
      *
      */
-    CHIP_ERROR EnsureSpace(size_t aRequiredSpace);
+    CHIP_ERROR EnsureSpaceInCircularBuffer(size_t aRequiredSpace);
 
     /**
      * @brief
