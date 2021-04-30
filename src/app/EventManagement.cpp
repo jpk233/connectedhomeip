@@ -99,8 +99,8 @@ struct EventEnvelopeContext
     size_t mNumFieldsToRead =
         2 /* PriorityLevel and DeltaSystemTimestamp are there if that is not first event when putting events in report*/;
     Timestamp mDeltaSystemTime = Timestamp::UTC(0);
-    Timestamp mDeltaUtc = Timestamp::System(0);
-    PriorityLevel mPriority = PriorityLevel::First;
+    Timestamp mDeltaUtc        = Timestamp::System(0);
+    PriorityLevel mPriority    = PriorityLevel::First;
 };
 
 EventManagement::EventManagement(Messaging::ExchangeManager * apExchangeMgr, int aNumBuffers,
@@ -133,7 +133,7 @@ void EventManagement::Init(Messaging::ExchangeManager * apExchangeManager, int a
         current->mProcessEvictedElement = AlwaysFail;
         current->mAppData               = nullptr;
         current->mPriority              = apLogStorageResources[bufferIndex].mPriority;
-        current->mpEventNumberCounter = apLogStorageResources[bufferIndex].InitializeCounter();
+        current->mpEventNumberCounter   = apLogStorageResources[bufferIndex].InitializeCounter();
 
         if (current->mpEventNumberCounter == nullptr)
         {
@@ -270,7 +270,7 @@ exit:
 }
 
 CHIP_ERROR EventManagement::ConstructEvent(EventLoadOutContext * apContext, EventLoggingDelegate * apDelegate,
-                                      const EventOptions * apOptions)
+                                           const EventOptions * apOptions)
 {
 
     CHIP_ERROR err       = CHIP_NO_ERROR;
@@ -287,7 +287,7 @@ CHIP_ERROR EventManagement::ConstructEvent(EventLoadOutContext * apContext, Even
 
     eventDataElementBuilder.Init(&(apContext->mWriter));
     eventPathBuilder = eventDataElementBuilder.CreateEventPathBuilder();
-    err = eventPathBuilder.GetError();
+    err              = eventPathBuilder.GetError();
     SuccessOrExit(err);
 
     // TODO: Revisit NodeId since the the encoding spec and the IM seem to disagree on how this stuff works
@@ -319,8 +319,7 @@ CHIP_ERROR EventManagement::ConstructEvent(EventLoadOutContext * apContext, Even
             eventDataElementBuilder.DeltaSystemTimestamp(deltatime);
         }
     }
-    err = eventDataElementBuilder.GetError()
-    SuccessOrExit(err);
+    err = eventDataElementBuilder.GetError() SuccessOrExit(err);
 
     err = apContext->mWriter.StartContainer(ContextTag(chip::app::EventDataElement::kCsTag_Data), chip::TLV::kTLVType_Structure,
                                             dataContainerType);
